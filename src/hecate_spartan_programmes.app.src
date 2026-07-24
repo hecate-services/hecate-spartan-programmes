@@ -1,0 +1,10 @@
+%% The app stub that makes this a rebar3 project. There is no runtime here: the
+%% experiments are driven from a shell or a script, never started as a service.
+{application, hecate_spartan_programmes, [
+    {description, "Experiment runners for the hecate-spartan research programmes"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [kernel, stdlib, inets, ssl, jsx]},
+    {env, []},
+    {licenses, ["Apache-2.0"]}
+]}.
