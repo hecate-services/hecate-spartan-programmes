@@ -1,0 +1,24 @@
+M1 self-audit economics  n=79 (scored 79/108 confirm; 28/35 calib)
+  ungrounded/item: single_pass=0.228 draft_verify=0.165  (rel reduction 27.8%%)
+  grounded/item:   single_pass=2.127 draft_verify=1.595
+  drop grounded=0.532  drop ungrounded=0.063  (L2 wants grounded<ungrounded)
+  token ratio=2.187x  ceiling=2.393x  base ungrounded rate=0.145
+  ledger: wall-clock/item single_pass=24108ms draft_verify=47241ms  retries=0 cached_tokens=0
+  model=qwen2.5:7b-instruct-q4_K_M stable=true
+  L1=false L2=false ceiling_ok=true above_noise=false void=false parse_gap_ok=false
+  ==> FAIL: self-audit does not earn its compute on this workload
+
+%% verdict term, for the record:
+#{void => false,pass => false,model_stable => true,
+  model => <<"qwen2.5:7b-instruct-q4_K_M">>,calib_items => 35,
+  calib_scored => 28,confirm_items => 108,confirm_scored => 79,
+  dv_parse_fail => 0.2222222222222222,mean_dv_ms => 47241.16455696202,
+  mean_sp_ms => 24108.316455696204,parse_fail_gap_ok => false,
+  sp_parse_fail => 0.06481481481481481,total_cached => 0,total_retries => 0,
+  n => 79,mean_sp_ungrounded => 0.22784810126582278,
+  mean_dv_ungrounded => 0.16455696202531644,
+  rel_reduction => 0.2777777777777778,mean_sp_grounded => 2.1265822784810124,
+  mean_dv_grounded => 1.5949367088607596,drop_grounded => 0.5316455696202529,
+  drop_ungrounded => 0.06329113924050633,token_ratio => 2.186762778505898,
+  ceiling => 2.3934387241186346,base_ungrounded_rate => 0.14545454545454545,
+  l1 => false,l2 => false,ceiling_ok => true,above_noise => false}
