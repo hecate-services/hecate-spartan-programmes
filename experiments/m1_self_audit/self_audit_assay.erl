@@ -156,9 +156,13 @@ summary(V) ->
     io:format("  token ratio=~.3fx  ceiling=~.3fx  base ungrounded rate=~.3f~n",
               [maps:get(token_ratio, V), maps:get(ceiling, V),
                maps:get(base_ungrounded_rate, V)]),
-    io:format("  ledger: wall-clock/item single_pass=~.0fms draft_verify=~.0fms  "
+    %% Milliseconds are rounded to integers rather than printed with `~.0f':
+    %% Erlang's float precision must be > 0, so `~.0f' raises badarg. It did, in
+    %% the summary path, which runs AFTER scoring — a long run would have
+    %% completed and then died before recording its verdict.
+    io:format("  ledger: wall-clock/item single_pass=~bms draft_verify=~bms  "
               "retries=~b cached_tokens=~b~n",
-              [maps:get(mean_sp_ms, V), maps:get(mean_dv_ms, V),
+              [round(maps:get(mean_sp_ms, V)), round(maps:get(mean_dv_ms, V)),
                maps:get(total_retries, V), maps:get(total_cached, V)]),
     io:format("  model=~s stable=~w~n", [model_str(maps:get(model, V)), maps:get(model_stable, V)]),
     io:format("  L1=~w L2=~w ceiling_ok=~w above_noise=~w void=~w parse_gap_ok=~w~n",
