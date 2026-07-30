@@ -147,23 +147,47 @@ row(DraftG, DraftU, CopyG, CopyU) ->
 %% draft grounded 10 and 10 (mean 10); copy grounded 8 and 6 (mean 7); so 3.0 lost
 %% per item with no verification asked. Ungrounded 2 and 2 against 2 and 1: 0.5.
 d0_measures_attrition_test() ->
-    R = self_audit_ladder:report([row(10, 2, 8, 2), row(10, 2, 6, 1)], 2),
+    R = self_audit_ladder:report(d0, [row(10, 2, 8, 2), row(10, 2, 6, 1)], 2),
     ?assertEqual(3.0, maps:get(attrition_grounded, R)),
     ?assertEqual(0.5, maps:get(attrition_ungrounded, R)),
     ?assertEqual(2, maps:get(scored, R)).
 
 d0_never_signs_test() ->
-    R = self_audit_ladder:report([row(10, 2, 10, 2)], 1),
+    R = self_audit_ladder:report(d0, [row(10, 2, 10, 2)], 1),
     ?assertEqual(false, maps:get(signable, R)),
     ?assertNot(maps:is_key(pass, R)),
     ?assertNot(maps:is_key(verdict, R)).
 
 d0_counts_failures_test() ->
-    R = self_audit_ladder:report([row(5, 1, 5, 1), {fail, {parse, truncated}}], 2),
+    R = self_audit_ladder:report(d0, [row(5, 1, 5, 1), {fail, {parse, truncated}}], 2),
     ?assertEqual(1, maps:get(scored, R)),
     ?assertEqual(1, maps:get(failed, R)).
 
 no_attrition_reads_as_zero_test() ->
-    R = self_audit_ladder:report([row(7, 3, 7, 3)], 1),
+    R = self_audit_ladder:report(d0, [row(7, 3, 7, 3)], 1),
     ?assertEqual(0.0, maps:get(attrition_grounded, R)),
     ?assertEqual(0.0, maps:get(share_of_dv_grounded_drop, R)).
+
+%% --- D1: the report must show discrimination, which is the whole readout ---
+
+%% A keep-framed verifier that drops garbage and leaves good material alone is
+%% mechanism (b): the remove-framing's DEFAULT was the channel, and the repair is
+%% one sentence of prompt.
+d1_discriminating_pass_test() ->
+    R = self_audit_ladder:report(d1, [row(10, 4, 10, 1), row(8, 2, 8, 0)], 2),
+    ?assertEqual(d1, maps:get(rung, R)),
+    ?assert(maps:get(discriminates, R)),
+    ?assertEqual(0, maps:get(items_losing_grounded, R)),
+    ?assertEqual(2, maps:get(items_losing_ungrounded, R)).
+
+%% A keep-framed verifier that still destroys good material is mechanism (c), the
+%% capability floor, which no engine swap escapes.
+d1_still_destroying_test() ->
+    R = self_audit_ladder:report(d1, [row(10, 2, 5, 2), row(10, 2, 6, 1)], 2),
+    ?assertNot(maps:get(discriminates, R)),
+    ?assertEqual(2, maps:get(items_losing_grounded, R)).
+
+d1_is_still_not_signable_test() ->
+    R = self_audit_ladder:report(d1, [row(9, 3, 9, 1)], 1),
+    ?assertEqual(false, maps:get(signable, R)),
+    ?assertNot(maps:is_key(pass, R)).

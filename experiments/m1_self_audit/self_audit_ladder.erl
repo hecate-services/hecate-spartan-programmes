@@ -28,9 +28,9 @@
 %%% report says so on every line that could be mistaken for a result.
 -module(self_audit_ladder).
 
--export([d0/2, d0/3, summary/1]).
+-export([d0/2, d0/3, d1/2, d1/3, summary/1]).
 %% Pure arithmetic, exported so the report can be tested without a backend.
--export([report/2]).
+-export([report/3]).
 
 %% 018's per-item deletions on the 79 cleanly-scored confirmatory items, quoted
 %% for orientation only. D0 runs a different slice and a different arm, so these
@@ -46,34 +46,59 @@ d0(Provider, CorpusPath) ->
 %% count to `RecordPath' (FIX 2). Pass `none' to run without a store.
 -spec d0(string(), file:name_all(), file:name_all() | none) -> map() | {error, term()}.
 d0(Provider, CorpusPath, RecordPath) ->
-    with_corpus(self_audit_corpus:load(CorpusPath), Provider, RecordPath).
+    run(copy, Provider, CorpusPath, RecordPath).
 
-with_corpus({error, R}, _Provider, _RecordPath) ->
+-spec d1(string(), file:name_all()) -> map() | {error, term()}.
+d1(Provider, CorpusPath) ->
+    d1(Provider, CorpusPath, none).
+
+%% @doc Rung D1, the keep-instruction. Same slice, same model, same message shape
+%% as D0 and as the arm 018 signed; the only difference is the polarity of the
+%% verify prompt's default. D0 established that the model can re-emit a document
+%% losing nothing, so whatever destroyed 0.532 grounded fields per item was the
+%% instruction. D1 asks whether it was the instruction's DEFAULT.
+%%
+%% Reading, pre-committed in insight 019: if the keep-framing discriminates where
+%% the remove-framing did not, mechanism (b) was the channel and the deployable
+%% repair is one sentence of prompt. If it also destroys grounded material, the
+%% capability floor (c) is live, which survives an engine swap and would make D2 a
+%% measurement of the task rather than of the reviewer.
+-spec d1(string(), file:name_all(), file:name_all() | none) -> map() | {error, term()}.
+d1(Provider, CorpusPath, RecordPath) ->
+    run(keep, Provider, CorpusPath, RecordPath).
+
+run(Variant, Provider, CorpusPath, RecordPath) ->
+    with_corpus(self_audit_corpus:load(CorpusPath), Variant, Provider, RecordPath).
+
+with_corpus({error, R}, _Variant, _Provider, _RecordPath) ->
     {error, R};
-with_corpus({ok, Items}, Provider, RecordPath) ->
+with_corpus({ok, Items}, Variant, Provider, RecordPath) ->
     ensure_started(),
     {Calib, _Confirm} = self_audit_corpus:split(Items, calib_n(length(Items))),
     Store = self_audit_record:open(RecordPath),
-    Scored = [score(Provider, I, Store) || I <- Calib],
+    Scored = [score(Variant, Provider, I, Store) || I <- Calib],
     ok = self_audit_record:close(Store),
-    report(Scored, length(Calib)).
+    report(rung_of(Variant), Scored, length(Calib)).
+
+rung_of(copy) -> d0;
+rung_of(keep) -> d1.
 
 %% The same split the M1 assay uses, so "the calibration slice" means one thing.
 calib_n(N) -> max(1, N div 4).
 
 %% --- one item ---
 
-score(Provider, #{id := Id, text := Text}, Store) ->
+score(Variant, Provider, #{id := Id, text := Text}, Store) ->
     Emit = fun(Row) -> self_audit_record:emit(Store, Row#{item => Id}) end,
-    tally(self_audit_extract:attrition(Provider, Text, Emit), Text, Id, Store).
+    tally(self_audit_extract:paired(Variant, Provider, Text, Emit), Text, Id, Store).
 
 tally({error, Reason}, _Text, Id, Store) ->
     ok = self_audit_record:emit(Store, #{kind => item, item => Id, outcome => failed,
                                          error => fmt(Reason)}),
     {fail, Reason};
-tally({ok, DraftFields, CopyFields, U, _Calls}, Text, Id, Store) ->
+tally({ok, DraftFields, SecondFields, U, _Calls}, Text, Id, Store) ->
     Draft = self_audit_checker:tally(Text, DraftFields),
-    Copy = self_audit_checker:tally(Text, CopyFields),
+    Copy = self_audit_checker:tally(Text, SecondFields),
     ok = self_audit_record:emit(Store, #{kind => item, item => Id, outcome => ok,
                                          draft => Draft, copy => Copy,
                                          tokens => maps:get(total, U),
@@ -86,8 +111,8 @@ fmt(Reason) -> iolist_to_binary(io_lib:format("~p", [Reason])).
 
 %% --- the report: an effect size, never a verdict ---
 
--spec report([{ok, map()} | {fail, term()}], non_neg_integer()) -> map().
-report(Scored, NItems) ->
+-spec report(d0 | d1, [{ok, map()} | {fail, term()}], non_neg_integer()) -> map().
+report(Rung, Scored, NItems) ->
     Rows = [R || {ok, R} <- Scored],
     DraftG = [count(draft, grounded, R) || R <- Rows],
     DraftU = [count(draft, ungrounded, R) || R <- Rows],
@@ -95,7 +120,13 @@ report(Scored, NItems) ->
     CopyU  = [count(copy, ungrounded, R) || R <- Rows],
     DropG = self_audit_referee:mean(DraftG) - self_audit_referee:mean(CopyG),
     DropU = self_audit_referee:mean(DraftU) - self_audit_referee:mean(CopyU),
-    #{rung => d0, signable => false, items => NItems, scored => length(Rows),
+    #{rung => Rung, signable => false, items => NItems, scored => length(Rows),
+      %% D1's headline: did the keep-framing DISCRIMINATE, i.e. drop more
+      %% ungrounded than grounded? That is the direction 018's remove-framing
+      %% failed. Reported for D0 too, where it is expected to be ~0 either way.
+      discriminates => DropU > DropG,
+      items_losing_grounded => length([1 || R <- Rows, delta(grounded, R) < 0]),
+      items_losing_ungrounded => length([1 || R <- Rows, delta(ungrounded, R) < 0]),
       failed => length(Scored) - length(Rows),
       mean_draft_grounded => self_audit_referee:mean(DraftG),
       mean_copy_grounded => self_audit_referee:mean(CopyG),
@@ -133,6 +164,10 @@ count(Arm, Key, Row) -> maps:get(Key, maps:get(Arm, Row)).
 fields_in(Arm, Row) ->
     count(Arm, grounded, Row) + count(Arm, ungrounded, Row) + count(Arm, excluded, Row).
 
+%% Signed per-item change, second pass minus draft. Negative means the pass
+%% removed fields of that kind.
+delta(Key, Row) -> count(copy, Key, Row) - count(draft, Key, Row).
+
 share(_Drop, +0.0) -> 0.0;
 share(Drop, Ref)   -> Drop / Ref.
 
@@ -150,22 +185,29 @@ ensure_started() ->
 summary({error, R}) ->
     io:format("D0 error: ~p~n", [R]);
 summary(V) ->
-    io:format("~nD0 copy control (insight 019) -- NOT SIGNABLE, diagnostic only~n"),
+    Rung = maps:get(rung, V),
+    io:format("~n~s (insight 019) -- NOT SIGNABLE, diagnostic only~n", [title(Rung)]),
     io:format("  calibration slice: scored ~b/~b items (~b failed), model=~s~n",
               [maps:get(scored, V), maps:get(items, V), maps:get(failed, V),
                model_str(maps:get(model, V))]),
-    io:format("  grounded/item:   draft=~.3f  after copy=~.3f~n",
-              [maps:get(mean_draft_grounded, V), maps:get(mean_copy_grounded, V)]),
-    io:format("  ungrounded/item: draft=~.3f  after copy=~.3f~n",
-              [maps:get(mean_draft_ungrounded, V), maps:get(mean_copy_ungrounded, V)]),
-    io:format("  ATTRITION (lost with no verification asked):"
-              "  grounded=~.3f  ungrounded=~.3f~n",
-              [maps:get(attrition_grounded, V), maps:get(attrition_ungrounded, V)]),
+    io:format("  grounded/item:   draft=~.3f  after ~s=~.3f~n",
+              [maps:get(mean_draft_grounded, V), second_of(Rung),
+               maps:get(mean_copy_grounded, V)]),
+    io:format("  ungrounded/item: draft=~.3f  after ~s=~.3f~n",
+              [maps:get(mean_draft_ungrounded, V), second_of(Rung),
+               maps:get(mean_copy_ungrounded, V)]),
+    io:format("  ~s:  grounded=~.3f  ungrounded=~.3f~n",
+              [drop_label(Rung), maps:get(attrition_grounded, V),
+               maps:get(attrition_ungrounded, V)]),
+    io:format("  DISCRIMINATES (dropped more ungrounded than grounded)? ~w   "
+              "items losing grounded=~b  losing ungrounded=~b~n",
+              [maps:get(discriminates, V), maps:get(items_losing_grounded, V),
+               maps:get(items_losing_ungrounded, V)]),
     io:format("  for orientation only, 018 signed draft_verify dropping "
               "grounded=~.3f ungrounded=~.3f~n",
               [?DV_DROP_GROUNDED, ?DV_DROP_UNGROUNDED]),
-    io:format("  so pure regeneration could account for ~.1f percent of that grounded drop~n",
-              [100.0 * maps:get(share_of_dv_grounded_drop, V)]),
+    io:format("  so ~s accounts for ~.1f percent of that grounded drop~n",
+              [share_label(Rung), 100.0 * maps:get(share_of_dv_grounded_drop, V)]),
     io:format("  INSTRUMENT: ~b/~b items scored ZERO fields (numeric-valued fields are "
               "dropped untraced)~n",
               [maps:get(zero_field_items, V), maps:get(scored, V)]),
@@ -178,3 +220,15 @@ summary(V) ->
 model_str(undefined)           -> "?";
 model_str(M) when is_binary(M) -> M;
 model_str(M)                   -> io_lib:format("~p", [M]).
+
+title(d0) -> "D0 copy control";
+title(d1) -> "D1 keep-instruction".
+
+second_of(d0) -> "copy";
+second_of(d1) -> "keep".
+
+drop_label(d0) -> "ATTRITION (lost with no verification asked)";
+drop_label(d1) -> "DROPPED by the keep-framed verifier".
+
+share_label(d0) -> "pure regeneration";
+share_label(d1) -> "the keep-framing".

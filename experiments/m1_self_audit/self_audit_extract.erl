@@ -31,7 +31,7 @@
 %%% of discarding it (016 defect 2).
 -module(self_audit_extract).
 
--export([extract/3, extract/4, attrition/3, call/2, parse_fields/1]).
+-export([extract/3, extract/4, attrition/3, paired/4, call/2, parse_fields/1]).
 %% Pure ledger arithmetic, exported so the ledger contract can be tested against
 %% recorded provider usage shapes without a live backend.
 -export([usage/2, usage/3, sum_usage/2, classify/2]).
@@ -50,6 +50,12 @@
 %% FIX 2: called once per pass with the full record of that pass. The caller owns
 %% where it goes; this module only guarantees it is offered.
 -type emit()    :: fun((map()) -> any()).
+%% A ladder rung's return: the draft's fields, the second pass's fields, the
+%% summed ledger, and the call count. Both field lists come from the SAME draft,
+%% so the pairing is exact within the item.
+-type paired_result() :: {ok, [self_audit_checker:field()],
+                          [self_audit_checker:field()], usage(), pos_integer()} |
+                         {error, term()}.
 
 %% With reasoning_effort=low the JSON output is short (~a few hundred tokens); this
 %% is generous headroom while keeping per-call token volume low (free-tier TPM).
@@ -105,23 +111,44 @@ after_verify({ok, Fields, _Text, U2}, U1)     -> {ok, Fields, sum_usage(U1, U2),
 %%
 %% Both lists come from the SAME draft call, so the pairing is exact within the
 %% item and the control costs two calls rather than three.
--spec attrition(string(), binary(), emit()) ->
-    {ok, [self_audit_checker:field()], [self_audit_checker:field()], usage(), pos_integer()} |
-    {error, term()}.
+-spec attrition(string(), binary(), emit()) -> paired_result().
 attrition(Provider, Source, Emit) ->
-    after_d0_draft(pass_call(Provider, draft_messages(Source), copy_control, draft, Emit),
-                   Provider, Source, Emit).
+    paired(copy, Provider, Source, Emit).
 
-after_d0_draft({error, _} = E, _Provider, _Source, _Emit) ->
-    E;
-after_d0_draft({ok, DraftFields, DraftText, U1}, Provider, Source, Emit) ->
-    after_copy(pass_call(Provider, copy_messages(Source, DraftText),
-                         copy_control, copy, Emit), DraftFields, U1).
+%% @doc The ladder's shared shape: one draft, then one second pass that differs
+%% from the verify pass 018 signed in EXACTLY ONE THING, its system prompt.
+%%
+%%   copy (D0) "reproduce the draft exactly"     -> isolates regeneration loss
+%%   keep (D1) "keep every field you can confirm" -> isolates the default's polarity
+%%
+%% D1 is the whole reason D0's result matters. D0 showed the model can re-emit a
+%% document without losing anything, so what destroyed 0.532 grounded fields per
+%% item was the INSTRUCTION. The remove-framing says drop unless confirmed; the
+%% keep-framing says keep unless disconfirmed. Same task, same correction
+%% affordance, same message shape, opposite default. If the polarity alone fixes
+%% it, mechanism (b) was the channel and the repair is one sentence of prompt.
+-spec paired(copy | keep, string(), binary(), emit()) -> paired_result().
+paired(Variant, Provider, Source, Emit) ->
+    Arm = arm_of(Variant),
+    after_first(pass_call(Provider, draft_messages(Source), Arm, draft, Emit),
+                Variant, Arm, Provider, Source, Emit).
 
-after_copy({error, _} = E, _DraftFields, _U1) ->
+arm_of(copy) -> copy_control;
+arm_of(keep) -> keep_instruction.
+
+after_first({error, _} = E, _Variant, _Arm, _Provider, _Source, _Emit) ->
     E;
-after_copy({ok, CopyFields, _Text, U2}, DraftFields, U1) ->
-    {ok, DraftFields, CopyFields, sum_usage(U1, U2), 2}.
+after_first({ok, DraftFields, DraftText, U1}, Variant, Arm, Provider, Source, Emit) ->
+    Messages = second_messages(Variant, Source, DraftText),
+    after_second(pass_call(Provider, Messages, Arm, Variant, Emit), DraftFields, U1).
+
+after_second({error, _} = E, _DraftFields, _U1) ->
+    E;
+after_second({ok, SecondFields, _Text, U2}, DraftFields, U1) ->
+    {ok, DraftFields, SecondFields, sum_usage(U1, U2), 2}.
+
+second_messages(copy, Source, DraftText) -> copy_messages(Source, DraftText);
+second_messages(keep, Source, DraftText) -> keep_messages(Source, DraftText).
 
 %% --- one pass: call, classify, offer to the sink, then deliver ---
 
@@ -213,6 +240,27 @@ copy_system() ->
       "against the article. Do not add, remove, correct, re-order or re-word any "
       "field. Copy every field through unchanged, including any field that looks "
       "wrong. Output ONLY the same JSON {\"fields\":[...]}, field for field.">>.
+
+%% D1's user message is byte-identical to `verify_messages/2' and to
+%% `copy_messages/2'. Only the system prompt differs.
+keep_messages(Source, DraftText) ->
+    [#{<<"role">> => <<"system">>, <<"content">> => keep_system()},
+     #{<<"role">> => <<"user">>,
+       <<"content">> => <<"ARTICLE:\n", Source/binary, "\n\nDRAFT:\n", DraftText/binary>>}].
+
+%% The polarity flip of `verify_system/0', and nothing else. Same task, same
+%% correction affordance, same output contract. What changes is the DEFAULT under
+%% doubt: the frozen prompt drops a field unless it can be confirmed, this one
+%% keeps a field unless it has been disconfirmed. That single variable is what
+%% separates mechanism (b), over-compliance with a remove-instruction, from
+%% mechanism (c), an inability to confirm long verbatim spans at all.
+keep_system() ->
+    <<"You are a careful verifier. Given an ARTICLE and a DRAFT extraction, keep "
+      "every field whose snippet is a substring of the article and whose value "
+      "appears inside its snippet. Correct snippets to exact article spans where "
+      "you can, which lets you keep more. Drop a field ONLY when you have checked "
+      "it against the article and found it to be wrong; if you are unsure, keep "
+      "it. Output ONLY the confirmed JSON {\"fields\":[...]}.">>.
 
 %% --- the pinned call ---
 
