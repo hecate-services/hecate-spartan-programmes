@@ -8,26 +8,37 @@
 %%% provider — the same discipline as the arena harness.
 -module(self_audit_assay).
 
--export([run/2, run/3, summary/1]).
+-export([run/2, run/3, run/4, summary/1]).
 %% Run-validity predicate, exported for testing: 014's mid-run model change.
 -export([model_stable/1]).
 
 -spec run(string(), file:name_all()) -> map() | {error, term()}.
 run(Provider, CorpusPath) ->
-    with_corpus(self_audit_corpus:load(CorpusPath), Provider, default_calib).
+    run(Provider, CorpusPath, default_calib, none).
 
--spec run(string(), file:name_all(), non_neg_integer()) -> map() | {error, term()}.
+-spec run(string(), file:name_all(), non_neg_integer() | default_calib) ->
+    map() | {error, term()}.
 run(Provider, CorpusPath, NCalib) ->
-    with_corpus(self_audit_corpus:load(CorpusPath), Provider, NCalib).
+    run(Provider, CorpusPath, NCalib, none).
 
-with_corpus({error, R}, _Provider, _NCalib) -> {error, R};
-with_corpus({ok, Items}, Provider, NCalibArg) ->
+%% @doc As `run/3', with FIX 2 (insight 017): every pass and every per-item paired
+%% count is written to `RecordPath', so a blocked run is diagnosable from retained
+%% data rather than from a summary. `none' disables the store.
+-spec run(string(), file:name_all(), non_neg_integer() | default_calib,
+          file:name_all() | none) -> map() | {error, term()}.
+run(Provider, CorpusPath, NCalib, RecordPath) ->
+    with_corpus(self_audit_corpus:load(CorpusPath), Provider, NCalib, RecordPath).
+
+with_corpus({error, R}, _Provider, _NCalib, _RecordPath) -> {error, R};
+with_corpus({ok, Items}, Provider, NCalibArg, RecordPath) ->
     ensure_started(),
     NCalib = calib_n(NCalibArg, length(Items)),
     {Calib, Confirm} = self_audit_corpus:split(Items, NCalib),
-    CalibScored = score_all(Provider, Calib),
+    Store = self_audit_record:open(RecordPath),
+    CalibScored = score_all(Provider, Calib, Store),
     {Ceiling, Base} = calibrate(CalibScored),
-    ConfirmScored = score_all(Provider, Confirm),
+    ConfirmScored = score_all(Provider, Confirm, Store),
+    ok = self_audit_record:close(Store),
     Rows = [Row || {ok, Row} <- ConfirmScored],
     Verdict = self_audit_referee:verdict(Rows, Ceiling, Base),
     finalize(Verdict, ConfirmScored, CalibScored).
@@ -44,12 +55,27 @@ calib_n(NCalib, N)        -> min(NCalib, N).
 
 %% --- scoring one item on both arms (interleaved) ---
 
-score_all(Provider, Items) -> [score_item(Provider, I) || I <- Items].
+score_all(Provider, Items, Store) -> [score_item(Provider, I, Store) || I <- Items].
 
-score_item(Provider, #{text := Text}) ->
-    Sp = self_audit_extract:extract(single_pass, Provider, Text),
-    Dv = self_audit_extract:extract(draft_verify, Provider, Text),
-    combine(Sp, Dv, Text).
+score_item(Provider, #{id := Id, text := Text}, Store) ->
+    Emit = fun(Row) -> self_audit_record:emit(Store, Row#{item => Id}) end,
+    Sp = self_audit_extract:extract(single_pass, Provider, Text, Emit),
+    Dv = self_audit_extract:extract(draft_verify, Provider, Text, Emit),
+    record_item(combine(Sp, Dv, Text), Id, Store).
+
+%% FIX 2's second half: the per-item PAIRED COUNTS, not only the raw text. Without
+%% these a later sizing has to reconstruct variance from a Poisson proxy, which is
+%% exactly what the M1 run forced.
+record_item({ok, Row} = Result, Id, Store) ->
+    ok = self_audit_record:emit(Store, #{kind => item, item => Id, outcome => ok,
+                                         sp => maps:get(sp, Row), dv => maps:get(dv, Row),
+                                         sp_tokens => maps:get(sp_tokens, Row),
+                                         dv_tokens => maps:get(dv_tokens, Row)}),
+    Result;
+record_item({fail, Which} = Result, Id, Store) ->
+    ok = self_audit_record:emit(Store, #{kind => item, item => Id, outcome => failed,
+                                         arm => Which}),
+    Result.
 
 combine({ok, SpF, SpU, _}, {ok, DvF, DvU, _}, Text) ->
     {ok, #{sp => self_audit_checker:tally(Text, SpF),

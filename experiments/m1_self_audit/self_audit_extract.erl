@@ -22,19 +22,34 @@
 %%% `cached' is OBSERVATIONAL ONLY — no kill or void criterion reads it. It is
 %%% recorded because a broker that reports cached tokens changes what a repeated
 %%% prefix costs, and we want the number.
+%%% FIX 1 and FIX 2 (insight 017, built 2026-07-31 for the 019 ladder). 014 froze
+%%% "any output hitting the token limit is a parse-class failure" and the M1 run
+%%% did not implement it, so a truncated body and a malformed one were the same
+%%% event to the referee (016 defect 1). Truncation is now its own class, detected
+%%% before parseability is even consulted. And every pass now offers its raw text,
+%%% usage and outcome to an emit function, so a run can retain what it saw instead
+%%% of discarding it (016 defect 2).
 -module(self_audit_extract).
 
--export([extract/3, call/2, parse_fields/1]).
+-export([extract/3, extract/4, attrition/3, call/2, parse_fields/1]).
 %% Pure ledger arithmetic, exported so the ledger contract can be tested against
 %% recorded provider usage shapes without a live backend.
--export([usage/2, sum_usage/2]).
+-export([usage/2, usage/3, sum_usage/2, classify/2]).
 
--export_type([usage/0]).
+-export_type([usage/0, pass/0, outcome/0, emit/0]).
 
 -type usage() :: #{prompt := non_neg_integer(), completion := non_neg_integer(),
                    total := non_neg_integer(), cached := non_neg_integer(),
                    elapsed_ms := non_neg_integer(), retries := non_neg_integer(),
-                   model := binary()}.
+                   model := binary(), finish_reason := binary(),
+                   truncated := boolean()}.
+%% Which call within an arm produced a row. `copy' belongs to D0 (insight 019).
+-type pass()    :: draft | verify | copy.
+%% FIX 1: `truncated' is a class of its own, never folded into `malformed'.
+-type outcome() :: ok | truncated | malformed.
+%% FIX 2: called once per pass with the full record of that pass. The caller owns
+%% where it goes; this module only guarantees it is offered.
+-type emit()    :: fun((map()) -> any()).
 
 %% With reasoning_effort=low the JSON output is short (~a few hundred tokens); this
 %% is generous headroom while keeping per-call token volume low (free-tier TPM).
@@ -46,45 +61,118 @@
 %% token usage, and the number of LLM calls (1 or 2; a retry would raise it).
 -spec extract(single_pass | draft_verify, string(), binary()) ->
     {ok, [self_audit_checker:field()], usage(), pos_integer()} | {error, term()}.
-extract(single_pass, Provider, Source) ->
-    single(Provider, Source);
-extract(draft_verify, Provider, Source) ->
-    verify(Provider, Source).
+extract(Arm, Provider, Source) ->
+    extract(Arm, Provider, Source, fun(_Row) -> ok end).
 
-single(Provider, Source) ->
-    on_draft(call(Provider, draft_messages(Source))).
+%% @doc As `extract/3', but every pass is offered to `Emit' before it is turned
+%% into a result (FIX 2). The emitted row carries arm, pass, raw text, usage and
+%% outcome, which is exactly what 016 could not explain its own blocker without.
+-spec extract(single_pass | draft_verify, string(), binary(), emit()) ->
+    {ok, [self_audit_checker:field()], usage(), pos_integer()} | {error, term()}.
+extract(single_pass, Provider, Source, Emit) ->
+    single(Provider, Source, Emit);
+extract(draft_verify, Provider, Source, Emit) ->
+    verify(Provider, Source, Emit).
 
-on_draft({error, _} = E) -> E;
-on_draft({ok, Text, U}) ->
-    on_fields(parse_fields(Text), U).
+single(Provider, Source, Emit) ->
+    one(pass_call(Provider, draft_messages(Source), single_pass, draft, Emit)).
 
-on_fields({error, R}, _U)      -> {error, {parse, R}};
-on_fields({ok, Fields}, U)     -> {ok, Fields, U, 1}.
+one({error, _} = E)              -> E;
+one({ok, Fields, _Text, U})      -> {ok, Fields, U, 1}.
 
-verify(Provider, Source) ->
-    draft_then_verify(call(Provider, draft_messages(Source)), Provider, Source).
+verify(Provider, Source, Emit) ->
+    after_draft(pass_call(Provider, draft_messages(Source), draft_verify, draft, Emit),
+                Provider, Source, Emit).
 
-draft_then_verify({error, _} = E, _Provider, _Source) -> E;
-draft_then_verify({ok, DraftText, U1}, Provider, Source) ->
-    second_pass(call(Provider, verify_messages(Source, DraftText)), U1).
+after_draft({error, _} = E, _Provider, _Source, _Emit) ->
+    E;
+after_draft({ok, _Fields, DraftText, U1}, Provider, Source, Emit) ->
+    after_verify(pass_call(Provider, verify_messages(Source, DraftText),
+                           draft_verify, verify, Emit), U1).
 
-second_pass({error, _} = E, _U1) -> E;
-second_pass({ok, Text, U2}, U1) ->
-    on_fields2(parse_fields(Text), sum_usage(U1, U2)).
+after_verify({error, _} = E, _U1)             -> E;
+after_verify({ok, Fields, _Text, U2}, U1)     -> {ok, Fields, sum_usage(U1, U2), 2}.
 
-on_fields2({error, R}, _U)  -> {error, {parse, R}};
-on_fields2({ok, Fields}, U) -> {ok, Fields, U, 2}.
+%% @doc D0, the copy control (insight 019). One draft, then a pass whose ONLY
+%% difference from `verify_messages/2' is the system prompt: same article, same
+%% draft, same message shape, but the instruction is "reproduce exactly" instead
+%% of "remove what you cannot confirm".
+%%
+%% Any field lost between the two lists is REGENERATION ATTRITION, lost with no
+%% verification decision taken at all. That is mechanism (d) in 019, and it is the
+%% one that survives an engine swap, so it is worth knowing before anything larger
+%% is built.
+%%
+%% Both lists come from the SAME draft call, so the pairing is exact within the
+%% item and the control costs two calls rather than three.
+-spec attrition(string(), binary(), emit()) ->
+    {ok, [self_audit_checker:field()], [self_audit_checker:field()], usage(), pos_integer()} |
+    {error, term()}.
+attrition(Provider, Source, Emit) ->
+    after_d0_draft(pass_call(Provider, draft_messages(Source), copy_control, draft, Emit),
+                   Provider, Source, Emit).
+
+after_d0_draft({error, _} = E, _Provider, _Source, _Emit) ->
+    E;
+after_d0_draft({ok, DraftFields, DraftText, U1}, Provider, Source, Emit) ->
+    after_copy(pass_call(Provider, copy_messages(Source, DraftText),
+                         copy_control, copy, Emit), DraftFields, U1).
+
+after_copy({error, _} = E, _DraftFields, _U1) ->
+    E;
+after_copy({ok, CopyFields, _Text, U2}, DraftFields, U1) ->
+    {ok, DraftFields, CopyFields, sum_usage(U1, U2), 2}.
+
+%% --- one pass: call, classify, offer to the sink, then deliver ---
+
+pass_call(Provider, Messages, Arm, Pass, Emit) ->
+    settle(call(Provider, Messages), Arm, Pass, Emit).
+
+settle({error, Reason}, Arm, Pass, Emit) ->
+    _ = Emit(#{kind => pass, arm => Arm, pass => Pass, outcome => call_failed,
+               raw => <<>>, error => iolist_to_binary(io_lib:format("~p", [Reason]))}),
+    {error, Reason};
+settle({ok, Text, U}, Arm, Pass, Emit) ->
+    Result = classify(Text, U),
+    _ = Emit(row(Arm, Pass, Text, U, Result)),
+    deliver(Result, Text, U).
+
+row(Arm, Pass, Text, U, {Outcome, _Fields}) ->
+    #{kind => pass, arm => Arm, pass => Pass, outcome => Outcome,
+      raw => Text, usage => U}.
+
+deliver({ok, Fields}, Text, U)   -> {ok, Fields, Text, U};
+deliver({Outcome, _}, _Text, _U) -> {error, {parse, Outcome}}.
+
+%% @doc FIX 1. Truncation is checked BEFORE parseability, and a truncated body is
+%% a failure even when it happens to parse, because that is what 014 froze: "any
+%% output hitting the token limit is a parse-class failure". Exported so the rule
+%% can be tested without a live backend.
+-spec classify(binary(), usage()) -> {outcome(), [self_audit_checker:field()]}.
+classify(Text, U) ->
+    on_truncation(maps:get(truncated, U, false), Text).
+
+on_truncation(true, _Text) -> {truncated, []};
+on_truncation(false, Text) -> parsed(parse_fields(Text)).
+
+parsed({ok, Fields})         -> {ok, Fields};
+parsed({error, unparseable}) -> {malformed, []}.
 
 %% draft_verify's cost is BOTH calls: tokens, wall-clock and retries all add. The
 %% model is pinned for the whole run, so either row's is the run's model.
+%% `truncated' is sticky across passes: if EITHER call hit the cap the arm's
+%% output is truncation-class, which is what makes the asymmetry 016 suspected
+%% (the verify pass writes the longer body) visible instead of inferred.
 sum_usage(A, B) ->
-    #{prompt      => maps:get(prompt, A) + maps:get(prompt, B),
-      completion  => maps:get(completion, A) + maps:get(completion, B),
-      total       => maps:get(total, A) + maps:get(total, B),
-      cached      => maps:get(cached, A) + maps:get(cached, B),
-      elapsed_ms  => maps:get(elapsed_ms, A) + maps:get(elapsed_ms, B),
-      retries     => maps:get(retries, A) + maps:get(retries, B),
-      model       => maps:get(model, A)}.
+    #{prompt        => maps:get(prompt, A) + maps:get(prompt, B),
+      completion    => maps:get(completion, A) + maps:get(completion, B),
+      total         => maps:get(total, A) + maps:get(total, B),
+      cached        => maps:get(cached, A) + maps:get(cached, B),
+      elapsed_ms    => maps:get(elapsed_ms, A) + maps:get(elapsed_ms, B),
+      retries       => maps:get(retries, A) + maps:get(retries, B),
+      model         => maps:get(model, A),
+      finish_reason => maps:get(finish_reason, B, <<>>),
+      truncated     => maps:get(truncated, A, false) orelse maps:get(truncated, B, false)}.
 
 %% --- prompts (frozen with the experiment) ---
 
@@ -110,6 +198,21 @@ verify_system() ->
       "field whose value does not appear inside its snippet. Correct snippets to exact "
       "article spans where you can; drop the field if you cannot. Keep every field that "
       "is correctly grounded. Output ONLY the corrected JSON {\"fields\":[...]}.">>.
+
+%% D0's user message is byte-identical to `verify_messages/2'. Only the system
+%% prompt differs, so the copy control changes exactly ONE variable against the
+%% arm 018 signed. Anything lost here was lost by regenerating the document, not
+%% by judging it.
+copy_messages(Source, DraftText) ->
+    [#{<<"role">> => <<"system">>, <<"content">> => copy_system()},
+     #{<<"role">> => <<"user">>,
+       <<"content">> => <<"ARTICLE:\n", Source/binary, "\n\nDRAFT:\n", DraftText/binary>>}].
+
+copy_system() ->
+    <<"Reproduce the DRAFT exactly as it is given to you. Do not verify anything "
+      "against the article. Do not add, remove, correct, re-order or re-word any "
+      "field. Copy every field through unchanged, including any field that looks "
+      "wrong. Output ONLY the same JSON {\"fields\":[...]}, field for field.">>.
 
 %% --- the pinned call ---
 
@@ -155,12 +258,16 @@ retry(Config, Messages, Keys, Left, Retries) ->
 do_call(undefined, _Messages, _Key) -> {error, unknown_provider};
 do_call(Config, Messages, Key) ->
     Model = maps:get(model, Config),
+    %% The cap travels with the call because FIX 1's second truncation test is
+    %% "completion_tokens == the cap actually sent"; a cap read from a default
+    %% somewhere else would silently stop detecting.
+    Cap = maps:get(max_tokens, Config, ?MAX_TOKENS),
     Base = #{<<"model">> => Model, <<"temperature">> => 0,
-             <<"max_tokens">> => maps:get(max_tokens, Config, ?MAX_TOKENS),
+             <<"max_tokens">> => Cap,
              <<"messages">> => Messages},
     Body = jsx:encode(reasoning(Model, Base)),
     Req = {maps:get(url, Config), header(Key), "application/json", Body},
-    post(Req, maps:get(timeout, Config, 120000), Model).
+    post(Req, maps:get(timeout, Config, 120000), Model, Cap).
 
 header(none) -> [];
 header(Key)  -> [{"Authorization", "Bearer " ++ Key}].
@@ -176,21 +283,21 @@ reasoning(Model, Base) ->
 add_effort(nomatch, Base) -> Base;
 add_effort(_Match, Base)  -> Base#{<<"reasoning_effort">> => <<"low">>}.
 
-post(Req, Timeout, Model) ->
+post(Req, Timeout, Model, Cap) ->
     Result = httpc:request(post, Req, [{timeout, Timeout}, {ssl, [{verify, verify_none}]}],
                            [{body_format, binary}]),
-    on_http(Result, Model).
+    on_http(Result, Model, Cap).
 
-on_http({ok, {{_, 200, _}, _H, Resp}}, Model)  -> parse_response(Resp, Model);
-on_http({ok, {{_, Code, _}, _H, Resp}}, _M)    -> {error, {http, Code, Resp}};
-on_http({error, R}, _M)                        -> {error, {httpc, R}}.
+on_http({ok, {{_, 200, _}, _H, Resp}}, Model, Cap) -> parse_response(Resp, Model, Cap);
+on_http({ok, {{_, Code, _}, _H, Resp}}, _M, _Cap)  -> {error, {http, Code, Resp}};
+on_http({error, R}, _M, _Cap)                      -> {error, {httpc, R}}.
 
-parse_response(Resp, Model) ->
+parse_response(Resp, Model, Cap) ->
     try
         Json = jsx:decode(Resp, [return_maps]),
         [Choice | _] = maps:get(<<"choices">>, Json),
         Text = maps:get(<<"content">>, maps:get(<<"message">>, Choice)),
-        {ok, text_bin(Text), usage(Json, Model)}
+        {ok, text_bin(Text), usage(Json, Model, Cap)}
     catch _:_ ->
         {error, bad_response}
     end.
@@ -201,14 +308,42 @@ text_bin(_) -> <<>>.
 %% `elapsed_ms' and `retries' are filled by the caller (they span attempts, so a
 %% single response cannot know them); seeded here so the map shape is complete.
 usage(Json, Model) ->
+    usage(Json, Model, ?MAX_TOKENS).
+
+usage(Json, Model, Cap) ->
     U = maps:get(<<"usage">>, Json, #{}),
-    #{prompt      => uint(maps:get(<<"prompt_tokens">>, U, 0)),
-      completion  => uint(maps:get(<<"completion_tokens">>, U, 0)),
-      total       => uint(total_of(U)),
-      cached      => uint(cached_of(U)),
-      elapsed_ms  => 0,
-      retries     => 0,
-      model       => Model}.
+    Completion = uint(maps:get(<<"completion_tokens">>, U, 0)),
+    Finish = finish_of(Json),
+    #{prompt        => uint(maps:get(<<"prompt_tokens">>, U, 0)),
+      completion    => Completion,
+      total         => uint(total_of(U)),
+      cached        => uint(cached_of(U)),
+      elapsed_ms    => 0,
+      retries       => 0,
+      model         => Model,
+      finish_reason => Finish,
+      truncated     => truncated(Finish, Completion, Cap)}.
+
+%% FIX 1 (insight 017), the rule 014 froze and the M1 run never built. Two tests,
+%% because providers disagree about which they report: the OpenAI `finish_reason',
+%% and the completion reaching the cap that was actually sent. Either is
+%% truncation, and truncation is its own parse class.
+truncated(<<"length">>, _Completion, _Cap) ->
+    true;
+truncated(_Finish, Completion, Cap) when is_integer(Cap), Cap > 0, Completion >= Cap ->
+    true;
+truncated(_Finish, _Completion, _Cap) ->
+    false.
+
+finish_of(Json) -> choice_finish(maps:get(<<"choices">>, Json, [])).
+
+choice_finish([Choice | _]) when is_map(Choice) ->
+    bin(maps:get(<<"finish_reason">>, Choice, <<>>));
+choice_finish(_NoChoices) ->
+    <<>>.
+
+bin(B) when is_binary(B) -> B;
+bin(_NotBinary)          -> <<>>.
 
 %% Prefer the reported total; fall back to prompt+completion so a provider that
 %% omits total does not silently ledger a zero-cost call.
