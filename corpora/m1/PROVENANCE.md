@@ -1,7 +1,7 @@
 # M1 corpus — freeze record
 
-The frozen source corpus for experiment M1 (insight 014). `m1_corpus.jsonl` is the
-artefact; `scripts/harvest-m1-corpus.sh` is how it was made.
+The frozen source corpus for experiment M1 (insight 014). `corpora/m1/corpus.jsonl`
+is the artefact; `scripts/harvest-m1-corpus.sh` is how it was made.
 
 **Frozen: 2026-07-24. Never regenerated.** Re-running the harvester will not
 reproduce it, because the feeds move. If this corpus is ever replaced, that is a
