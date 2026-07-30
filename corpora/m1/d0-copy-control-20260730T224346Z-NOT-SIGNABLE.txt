@@ -1,0 +1,24 @@
+
+D0 copy control (insight 019) -- NOT SIGNABLE, diagnostic only
+  calibration slice: scored 35/35 items (0 failed), model=qwen2.5:7b-instruct-q4_K_M
+  grounded/item:   draft=1.571  after copy=1.629
+  ungrounded/item: draft=0.343  after copy=0.286
+  ATTRITION (lost with no verification asked):  grounded=-0.057  ungrounded=0.057
+  for orientation only, 018 signed draft_verify dropping grounded=0.532 ungrounded=0.063
+  so pure regeneration could account for -10.7 percent of that grounded drop
+  INSTRUMENT: 2/35 items scored ZERO fields (numeric-valued fields are dropped untraced)
+  excluded/item=0.229  truncated items=0  total tokens=19519
+  ==> NO VERDICT. This selects the next rung, nothing else.
+
+
+%% D0 report term, for the record (NOT SIGNABLE):
+#{items => 35,model => <<"qwen2.5:7b-instruct-q4_K_M">>,failed => 0,
+  attrition_grounded => -0.05714285714285716,
+  attrition_ungrounded => 0.05714285714285716,
+  mean_copy_grounded => 1.6285714285714286,
+  mean_copy_ungrounded => 0.2857142857142857,
+  mean_draft_excluded => 0.22857142857142856,
+  mean_draft_grounded => 1.5714285714285714,
+  mean_draft_ungrounded => 0.34285714285714286,rung => d0,scored => 35,
+  share_of_dv_grounded_drop => -0.10741138560687435,signable => false,
+  total_tokens => 19519,truncated_items => 0,zero_field_items => 2}
