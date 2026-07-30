@@ -78,13 +78,27 @@ repository's test suite.
 
 | # | Experiment | Insight | Status |
 |---|---|---|---|
-| M1 | self-audit economics: does draft-then-verify earn its 2x compute? | [014](https://codeberg.org/hecate-services/hecate-spartan/src/branch/main/insights/014_experiment_m1_self_audit_economics_pre_registration.md) | built, corpus frozen, **not yet run** |
+| M1 | self-audit economics: does draft-then-verify earn its 2x compute? | [014](https://github.com/hecate-services/hecate-spartan/blob/main/insights/014_experiment_m1_self_audit_economics_pre_registration.md) pre-reg, [016](https://github.com/hecate-services/hecate-spartan/blob/main/insights/016_experiment_m1_result_an_instrument_failure.md) + [018](https://github.com/hecate-services/hecate-spartan/blob/main/insights/018_self_audit_fails_l2_a_bound_beats_a_rerun.md) results | **RUN 2026-07-24, SIGNED.** Corpus exhausted. Programme S2 closed on L2 |
 
-M1's confirmatory slice is scored **once**, and `self_audit_assay:run/2` performs
-calibration and confirmatory scoring in a single pass. Running it is a decision,
-not a build step.
+**M1 is spent.** It ran once on 2026-07-24 against the frozen 143-item corpus (35
+calibration, 108 confirmatory). 016 signed the run an instrument failure; 018
+signed the verdict from it under a defect-robust bound, without a re-run:
+draft-then-verify deletes grounded material over ungrounded, so self-audit does not
+earn its compute on attributed extraction.
 
-## Running M1
+The confirmatory slice is scored **once** and it has been scored. Re-running
+`self_audit_assay:run/2` on `corpora/m1/corpus.jsonl` produces a diagnostic, never
+a verdict: the feed has been seen, so re-scoring it is the shopping pattern. Any
+new question against this task needs a fresh corpus under 017's frozen
+harvest-window rule.
+
+Two instrument repairs are pre-registered in 017 and deliberately **not built**,
+parked for the first experiment that needs a *measured* L2 rather than a bounded
+direction: fix 1, truncation classified as its own parse class
+(`finish_reason == length` or `completion_tokens == max_tokens`); fix 2, per-item
+raw outputs and per-item paired counts persisted.
+
+## Running M1 (historical, for reproduction only)
 
 ```sh
 HECATE_LOCAL_URL=http://msi00.lab:11434/v1/chat/completions \
