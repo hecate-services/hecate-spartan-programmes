@@ -1,0 +1,26 @@
+
+D1 keep-instruction (insight 019) -- NOT SIGNABLE, diagnostic only
+  calibration slice: scored 29/35 items (6 failed), model=qwen2.5:7b-instruct-q4_K_M
+  grounded/item:   draft=1.655  after keep=1.552
+  ungrounded/item: draft=0.310  after keep=0.241
+  DROPPED by the keep-framed verifier:  grounded=0.103  ungrounded=0.069
+  DISCRIMINATES (dropped more ungrounded than grounded)? false   items losing grounded=5  losing ungrounded=3
+  for orientation only, 018 signed draft_verify dropping grounded=0.532 ungrounded=0.063
+  so the keep-framing accounts for 19.4 percent of that grounded drop
+  INSTRUMENT: 2/29 items scored ZERO fields (numeric-valued fields are dropped untraced)
+  excluded/item=0.241  truncated items=0  total tokens=16986
+  ==> NO VERDICT. This selects the next rung, nothing else.
+
+
+%% D1 report term, for the record (NOT SIGNABLE):
+#{items => 35,model => <<"qwen2.5:7b-instruct-q4_K_M">>,failed => 6,
+  attrition_grounded => 0.10344827586206895,
+  attrition_ungrounded => 0.06896551724137931,discriminates => false,
+  items_losing_grounded => 5,items_losing_ungrounded => 3,
+  mean_copy_grounded => 1.5517241379310345,
+  mean_copy_ungrounded => 0.2413793103448276,
+  mean_draft_excluded => 0.2413793103448276,
+  mean_draft_grounded => 1.6551724137931034,
+  mean_draft_ungrounded => 0.3103448275862069,rung => d1,scored => 29,
+  share_of_dv_grounded_drop => 0.19445164635727244,signable => false,
+  total_tokens => 16986,truncated_items => 0,zero_field_items => 2}
