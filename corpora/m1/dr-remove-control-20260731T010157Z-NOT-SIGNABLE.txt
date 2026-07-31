@@ -1,0 +1,26 @@
+
+DR remove control (the FROZEN verify prompt, within-slice) (insight 019) -- NOT SIGNABLE, diagnostic only
+  calibration slice: scored 27/35 items (8 failed), model=qwen2.5:7b-instruct-q4_K_M
+  grounded/item:   draft=1.630  after remove=1.407
+  ungrounded/item: draft=0.296  after remove=0.148
+  DROPPED by the frozen remove-framed verifier:  grounded=0.222  ungrounded=0.148
+  DISCRIMINATES (dropped more ungrounded than grounded)? false   items losing grounded=6  losing ungrounded=4
+  for orientation only, 018 signed draft_verify dropping grounded=0.532 ungrounded=0.063
+  so this slice's own remove-framing accounts for 41.8 percent of that grounded drop
+  INSTRUMENT: 2/27 items scored ZERO fields (numeric-valued fields are dropped untraced)
+  excluded/item=0.296  truncated items=0  total tokens=14751
+  ==> NO VERDICT. This selects the next rung, nothing else.
+
+
+%% DR report term, for the record (NOT SIGNABLE):
+#{items => 35,model => <<"qwen2.5:7b-instruct-q4_K_M">>,failed => 8,
+  attrition_grounded => 0.2222222222222221,
+  attrition_ungrounded => 0.14814814814814814,discriminates => false,
+  items_losing_grounded => 6,items_losing_ungrounded => 4,
+  mean_copy_grounded => 1.4074074074074074,
+  mean_copy_ungrounded => 0.14814814814814814,
+  mean_draft_excluded => 0.2962962962962963,
+  mean_draft_grounded => 1.6296296296296295,
+  mean_draft_ungrounded => 0.2962962962962963,rung => dr,scored => 27,
+  share_of_dv_grounded_drop => 0.41771094402673326,signable => false,
+  total_tokens => 14751,truncated_items => 0,zero_field_items => 2}
