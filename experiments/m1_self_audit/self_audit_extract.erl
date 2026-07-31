@@ -127,14 +127,21 @@ attrition(Provider, Source, Emit) ->
 %% keep-framing says keep unless disconfirmed. Same task, same correction
 %% affordance, same message shape, opposite default. If the polarity alone fixes
 %% it, mechanism (b) was the channel and the repair is one sentence of prompt.
--spec paired(copy | keep, string(), binary(), emit()) -> paired_result().
+%%   remove (DR) the FROZEN verify prompt, unmodified -> the within-slice
+%%              denominator. 018's drop was measured on the confirmatory slice, so
+%%              every comparison against it has mixed slices. This runs the same
+%%              instruction over the same 35 calibration items D0 and D1 used, with
+%%              the same within-item pairing, so the three become directly
+%%              comparable and the mixing stops.
+-spec paired(copy | keep | remove, string(), binary(), emit()) -> paired_result().
 paired(Variant, Provider, Source, Emit) ->
     Arm = arm_of(Variant),
     after_first(pass_call(Provider, draft_messages(Source), Arm, draft, Emit),
                 Variant, Arm, Provider, Source, Emit).
 
-arm_of(copy) -> copy_control;
-arm_of(keep) -> keep_instruction.
+arm_of(copy)   -> copy_control;
+arm_of(keep)   -> keep_instruction;
+arm_of(remove) -> remove_control.
 
 after_first({error, _} = E, _Variant, _Arm, _Provider, _Source, _Emit) ->
     E;
@@ -147,8 +154,11 @@ after_second({error, _} = E, _DraftFields, _U1) ->
 after_second({ok, SecondFields, _Text, U2}, DraftFields, U1) ->
     {ok, DraftFields, SecondFields, sum_usage(U1, U2), 2}.
 
-second_messages(copy, Source, DraftText) -> copy_messages(Source, DraftText);
-second_messages(keep, Source, DraftText) -> keep_messages(Source, DraftText).
+second_messages(copy, Source, DraftText)   -> copy_messages(Source, DraftText);
+second_messages(keep, Source, DraftText)   -> keep_messages(Source, DraftText);
+%% The frozen prompt, reused verbatim. NOT a variant of it: this control is
+%% worthless if the instruction is not the one 018 signed.
+second_messages(remove, Source, DraftText) -> verify_messages(Source, DraftText).
 
 %% --- one pass: call, classify, offer to the sink, then deliver ---
 

@@ -191,3 +191,19 @@ d1_is_still_not_signable_test() ->
     R = self_audit_ladder:report(d1, [row(9, 3, 9, 1)], 1),
     ?assertEqual(false, maps:get(signable, R)),
     ?assertNot(maps:is_key(pass, R)).
+
+%% --- DR: the within-slice remove control ---
+
+%% DR exists to supply the denominator every ladder comparison has been missing.
+%% It must reproduce 018's DIRECTION on this slice if the slice behaves like the
+%% confirmatory one: more grounded dropped than ungrounded.
+dr_reproduces_the_signed_direction_test() ->
+    R = self_audit_ladder:report(dr, [row(10, 2, 5, 2), row(10, 2, 6, 2)], 2),
+    ?assertEqual(dr, maps:get(rung, R)),
+    ?assertNot(maps:get(discriminates, R)),
+    ?assert(maps:get(attrition_grounded, R) > maps:get(attrition_ungrounded, R)).
+
+dr_is_also_not_signable_test() ->
+    R = self_audit_ladder:report(dr, [row(8, 2, 4, 1)], 1),
+    ?assertEqual(false, maps:get(signable, R)),
+    ?assertNot(maps:is_key(pass, R)).

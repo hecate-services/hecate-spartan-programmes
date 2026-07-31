@@ -28,7 +28,7 @@
 %%% report says so on every line that could be mistaken for a result.
 -module(self_audit_ladder).
 
--export([d0/2, d0/3, d1/2, d1/3, summary/1]).
+-export([d0/2, d0/3, d1/2, d1/3, dr/2, dr/3, summary/1]).
 %% Pure arithmetic, exported so the report can be tested without a backend.
 -export([report/3]).
 
@@ -67,6 +67,24 @@ d1(Provider, CorpusPath) ->
 d1(Provider, CorpusPath, RecordPath) ->
     run(keep, Provider, CorpusPath, RecordPath).
 
+%% @doc The remove control: the FROZEN verify prompt over the same calibration
+%% slice D0 and D1 used, with the same within-item pairing.
+%%
+%% This is a denominator, not a rung. Every comparison the ladder has made against
+%% 018's 0.532 grounded drop has mixed slices, because 018 measured the
+%% confirmatory slice and the ladder runs calibration. Fable r16 named this as the
+%% cheapest missing observation and as the only one that could put the capability
+%% floor back on the table: a within-slice remove drop near 0.5, together with a
+%% salvage-corrected D1 still showing per-field anti-discrimination, would restore
+%% it. Anything else settles the mixing and leaves the withdrawal standing.
+-spec dr(string(), file:name_all()) -> map() | {error, term()}.
+dr(Provider, CorpusPath) ->
+    dr(Provider, CorpusPath, none).
+
+-spec dr(string(), file:name_all(), file:name_all() | none) -> map() | {error, term()}.
+dr(Provider, CorpusPath, RecordPath) ->
+    run(remove, Provider, CorpusPath, RecordPath).
+
 run(Variant, Provider, CorpusPath, RecordPath) ->
     with_corpus(self_audit_corpus:load(CorpusPath), Variant, Provider, RecordPath).
 
@@ -80,8 +98,9 @@ with_corpus({ok, Items}, Variant, Provider, RecordPath) ->
     ok = self_audit_record:close(Store),
     report(rung_of(Variant), Scored, length(Calib)).
 
-rung_of(copy) -> d0;
-rung_of(keep) -> d1.
+rung_of(copy)   -> d0;
+rung_of(keep)   -> d1;
+rung_of(remove) -> dr.
 
 %% The same split the M1 assay uses, so "the calibration slice" means one thing.
 calib_n(N) -> max(1, N div 4).
@@ -111,7 +130,7 @@ fmt(Reason) -> iolist_to_binary(io_lib:format("~p", [Reason])).
 
 %% --- the report: an effect size, never a verdict ---
 
--spec report(d0 | d1, [{ok, map()} | {fail, term()}], non_neg_integer()) -> map().
+-spec report(d0 | d1 | dr, [{ok, map()} | {fail, term()}], non_neg_integer()) -> map().
 report(Rung, Scored, NItems) ->
     Rows = [R || {ok, R} <- Scored],
     DraftG = [count(draft, grounded, R) || R <- Rows],
@@ -222,13 +241,17 @@ model_str(M) when is_binary(M) -> M;
 model_str(M)                   -> io_lib:format("~p", [M]).
 
 title(d0) -> "D0 copy control";
-title(d1) -> "D1 keep-instruction".
+title(d1) -> "D1 keep-instruction";
+title(dr) -> "DR remove control (the FROZEN verify prompt, within-slice)".
 
 second_of(d0) -> "copy";
-second_of(d1) -> "keep".
+second_of(d1) -> "keep";
+second_of(dr) -> "remove".
 
 drop_label(d0) -> "ATTRITION (lost with no verification asked)";
-drop_label(d1) -> "DROPPED by the keep-framed verifier".
+drop_label(d1) -> "DROPPED by the keep-framed verifier";
+drop_label(dr) -> "DROPPED by the frozen remove-framed verifier".
 
 share_label(d0) -> "pure regeneration";
-share_label(d1) -> "the keep-framing".
+share_label(d1) -> "the keep-framing";
+share_label(dr) -> "this slice's own remove-framing".
